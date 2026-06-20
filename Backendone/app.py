@@ -6,12 +6,7 @@ import json
 app = Flask(__name__)
 CORS(app)
 
-DB = "database.db"
-
-def get_db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+from db import get_db
 
 def init_db():
     conn = get_db()
@@ -167,8 +162,7 @@ def check_availability():
         if b.get("date") == date and b.get("time") == time and b.get("roomId"):
             booked.append(b.get("roomId"))
     return jsonify({"booked_room_ids": booked})
-from payments import payments
-app.register_blueprint(payments)
+
 
 
 # ── SCHEDULE & SETTINGS ────────────────────────────────────────────────
@@ -233,5 +227,8 @@ def edit_order_items(order_id):
     conn.close()
     return jsonify({"ok": True, "newTotal": new_total})
 if __name__ == "__main__":
+    from payments import payments
+
+    app.register_blueprint(payments)
     init_db()
     app.run(debug=True, port=5000)
