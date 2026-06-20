@@ -1,7 +1,7 @@
 # payments.py
 import os, time, json, uuid, hmac, hashlib
 from flask import Blueprint, request, jsonify
-from app import get_db   # your existing SQLite helper
+from Backendone.app import get_db   # your existing SQLite helper
 
 payments = Blueprint("payments", __name__)
 PENDING_TTL_MS = 15 * 60 * 1000
