@@ -285,7 +285,7 @@ const T = {
   },
 };
 
-const API = "http://localhost:5000";
+const API = "https://aspan-cafe-backend.onrender.com";;
 
 const fmt = (n) => n.toLocaleString("ru-RU") + " ₸";
 const timeOf = (ts) => new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
