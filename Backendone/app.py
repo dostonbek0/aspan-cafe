@@ -226,9 +226,9 @@ def edit_order_items(order_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "newTotal": new_total})
+init_db()
 if __name__ == "__main__":
     from payments import payments
 
     app.register_blueprint(payments)
-    init_db()
     app.run(debug=True, port=5000)
