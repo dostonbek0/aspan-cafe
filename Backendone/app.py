@@ -1,10 +1,24 @@
 from flask import Flask, jsonify, request
+import requests as http_requests
 from flask_cors import CORS
 import sqlite3
 import json
+import os
 
 app = Flask(__name__)
-CORS(app)
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+limiter = Limiter(get_remote_address, app=app,
+                  default_limits=["200 per hour"])
+from flask_talisman import Talisman
+Talisman(app, force_https=True, strict_transport_security=True,
+         content_security_policy=None)   # set a stricter policy later
+# REPLACE: CORS(app)
+# WITH (use your real frontend URL):
+CORS(app,
+     origins=["https://aspan-cafe-frontend.onrender.com", "http://localhost:5173"],
+     supports_credentials=True)
 
 from db import get_db
 
@@ -36,7 +50,15 @@ def init_db():
     conn.close()
 
 # ── MENU ──────────────────────────────────────────
+from auth import check_login, require_owner
 
+@app.route("/api/login", methods=["POST"])
+def login():
+    body = request.get_json()
+    token = check_login(body.get("username"), body.get("password"))
+    if not token:
+        return jsonify(error="wrong username or password"), 401
+    return jsonify(token=token)
 @app.route("/api/menu", methods=["GET"])
 def get_menu():
     conn = get_db()
@@ -46,6 +68,7 @@ def get_menu():
     return jsonify(items)
 
 @app.route("/api/menu", methods=["POST"])
+@require_owner
 def save_menu():
     items = request.get_json()
     conn = get_db()
@@ -72,15 +95,33 @@ def get_orders():
     conn.close()
     return jsonify([json.loads(r["data"]) for r in rows])
 
+
+# 1. Standalone Turnstile Helper Function (No decorators here!)
+def turnstile_ok(token, ip):
+    r = http_requests.post(
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        data={"secret": os.environ["TURNSTILE_SECRET"],
+              "response": token, "remoteip": ip})
+    return r.json().get("success", False)
+
+
+# 2. Your Protected Flask API Endpoint
 @app.route("/api/orders", methods=["POST"])
+@limiter.limit("5 per minute")  # Locks down the order submission endpoint
 def place_order():
+    body = request.get_json()
+
+    # Run the invisible captcha check immediately before any logic or database calls
+    if not turnstile_ok(body.get("captcha"), request.remote_addr):
+        return jsonify(error="failed bot check"), 403
+
     conn = get_db()
     settings_row = conn.execute("SELECT data FROM settings WHERE key='cafe_status'").fetchone()
     if settings_row and not json.loads(settings_row["data"]).get("isOpen", True):
         conn.close()
         return jsonify({"error": "closed"}), 403
+
     order = request.get_json()
-    conn = get_db()
     conn.execute(
         "INSERT INTO orders (id, num, ts, status, payment_id, data) VALUES (?, ?, ?, ?, ?, ?)",
         (order["id"], order["num"], order["ts"], order["status"],
@@ -91,6 +132,7 @@ def place_order():
     return jsonify({"ok": True})
 
 @app.route("/api/orders/<order_id>", methods=["PUT"])
+@require_owner
 def update_order(order_id):
     body = request.get_json()
     new_status = body["status"]
@@ -122,26 +164,7 @@ def order_status(order_id):
             else (jsonify({"status": "unknown"}), 404))
 
 # ─────────────────────────────────────────────────
-@app.route("/api/orders/<order_id>/pay-demo", methods=["POST"])
-def demo_pay(order_id):
-    """Simulates a payment gateway callback. Demo only — delete before going live."""
-    body = request.get_json()
-    success = body.get("success", True)
-    conn = get_db()
-    row = conn.execute("SELECT data FROM orders WHERE id=?", (order_id,)).fetchone()
-    if not row:
-        conn.close()
-        return jsonify({"error": "not found"}), 404
-    order = json.loads(row["data"])
-    new_status = "paid" if success else "payment_failed"
-    order["status"] = new_status
-    conn.execute(
-        "UPDATE orders SET status=?, data=? WHERE id=?",
-        (new_status, json.dumps(order), order_id)
-    )
-    conn.commit()
-    conn.close()
-    return jsonify({"ok": True, "status": new_status})
+
 @app.route("/api/bookings/availability", methods=["GET"])
 def check_availability():
     date = request.args.get("date")
@@ -178,6 +201,7 @@ def get_cafe_settings():
 
 
 @app.route("/api/settings/cafe", methods=["PUT"])
+@require_owner
 def update_cafe_settings():
     body = request.get_json()
     conn = get_db()
@@ -189,6 +213,7 @@ def update_cafe_settings():
 
 # ── ADMIN ORDER EDITOR & LEDGER RECALCULATION ─────────────────────────
 @app.route("/api/orders/<order_id>/items", methods=["PUT"])
+@require_owner
 def edit_order_items(order_id):
     body = request.get_json()
     new_items = body.get("items", [])
@@ -231,4 +256,36 @@ if __name__ == "__main__":
     from payments import payments
 
     app.register_blueprint(payments)
-    app.run(debug=True, port=5000)
+    app.run(port=5000)
+    PRINTER_TOKEN = os.environ["PRINTER_TOKEN"]  # one long random secret
+
+
+    def check_printer(req):
+        return req.headers.get("Authorization", "").removeprefix("Bearer ") == PRINTER_TOKEN
+
+
+    @app.route("/api/print-jobs/claim", methods=["POST"])
+    def claim_jobs():
+        if not check_printer(request): return jsonify(error="no"), 401
+        conn = get_db()
+        rows = conn.execute("""
+            UPDATE print_jobs SET status='claimed', attempts=attempts+1
+            WHERE id IN (SELECT id FROM print_jobs WHERE status='queued'
+                         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 5)
+            RETURNING id, payload
+        """).fetchall()
+        conn.commit();
+        conn.close()
+        return jsonify(jobs=[dict(r) for r in rows])
+
+
+    @app.route("/api/print-jobs/<job_id>/done", methods=["POST"])
+    def job_done(job_id):
+        if not check_printer(request): return jsonify(error="no"), 401
+        ok = request.get_json().get("printed", False)
+        conn = get_db()
+        conn.execute("UPDATE print_jobs SET status=%s WHERE id=%s",
+                     ("printed" if ok else "failed", job_id))
+        conn.commit();
+        conn.close()
+        return jsonify(ok=True)

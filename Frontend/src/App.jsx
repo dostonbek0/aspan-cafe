@@ -306,7 +306,7 @@ async function apiGetMenu() {
   catch (e) { return null; }
 }
 async function apiSaveMenu(items) {
-  try { await fetch(`${API}/api/menu`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(items) }); return true; }
+  try { await fetch(`${API}/api/menu`, { method: "POST", headers: authHeaders(), body: JSON.stringify(items) }); return true; }
   catch (e) { return false; }
 }
 async function apiGetOrders() {
@@ -318,7 +318,7 @@ async function apiPlaceOrder(order) {
   catch (e) { return false; }
 }
 async function apiUpdateStatus(id, status) {
-  try { await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status }) }); return true; }
+  try { await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ status }) }); return true; }
   catch (e) { return false; }
 }
 async function apiConfirmPayment(id) {
@@ -338,18 +338,38 @@ async function apiCheckAvailability(date, time) {
   catch (e) { return []; }
 }
 
+async function apiLogin(username, password) {
+  try {
+    const r = await fetch(`${API}/api/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    if (!r.ok) return null;
+    const data = await r.json();
+    localStorage.setItem("aspan-token", data.token);
+    return data.token;
+  } catch (e) { return null; }
+}
+
+function authHeaders() {
+  const t = localStorage.getItem("aspan-token");
+  return t
+    ? { "Authorization": `Bearer ${t}`, "Content-Type": "application/json" }
+    : { "Content-Type": "application/json" };
+}
 async function apiGetCafeStatus() {
   try { const r = await fetch(`${API}/api/settings/cafe`); return await r.json(); }
   catch (e) { return { isOpen: true }; }
 }
 
 async function apiUpdateCafeStatus(data) {
-  try { await fetch(`${API}/api/settings/cafe`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) }); return true; }
+  try { await fetch(`${API}/api/settings/cafe`, { method: "PUT", headers: authHeaders(), body: JSON.stringify(data) }); return true; }
   catch (e) { return false; }
 }
 
 async function apiEditOrderItems(id, items, newTotal) {
-  try { const r = await fetch(`${API}/api/orders/${id}/items`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items, newTotal }) }); return await r.json(); }
+  try { const r = await fetch(`${API}/api/orders/${id}/items`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ items, newTotal }) }); return await r.json(); }
   catch (e) { return null; }
 }
 
@@ -445,12 +465,15 @@ function mapLinks(lat, lng) {
 function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, lastOrder, orders, refreshOrders, resetAfterOrder, booking, clearBooking }) {
   const [step, setStep] = useState("cart");
   const [type, setType] = useState("table");
+  const [captchaToken, setCaptchaToken] = useState("");
+  const turnstileRef = React.useRef(null);
   const [table, setTable] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [comment, setComment] = useState("");
   const [err, setErr] = useState("");
   const [sending, setSending] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
   const [location, setLocation] = useState(null);
   const [locLoading, setLocLoading] = useState(false);
   const [locErr, setLocErr] = useState("");
@@ -486,6 +509,9 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   const total = entries.reduce((s, e) => s + e.item.price * e.q, 0);
   const live = lastOrder ? orders.find((o) => o.id === lastOrder.id) || lastOrder : null;
 
+  useEffect(() => {
+  window.onTurnstileVerified = (token) => setCaptchaToken(token);
+  }, []);
   useEffect(() => { if (open && lastOrder && step === "done") { const tm = setInterval(refreshOrders, 10000); return () => clearInterval(tm); } }, [open, step, lastOrder, refreshOrders]);
   useEffect(() => {
     if (open && step !== "done") setStep(booking ? "checkout" : (entries.length ? step : "cart"));
@@ -495,6 +521,11 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   // No payment gateway, no awaiting_confirmation step. Kitchen sees it immediately.
   const submitOrder = async () => {
     setErr("");
+    if (!captchaToken) {
+      setErr(lang === "en" ? "Please complete the security check." : "Пройдите проверку безопасности.");
+      return;
+    }
+
     if (!booking) {
       if (type === "table" && !table.trim()) return setErr(t("needTable"));
       if (type === "pickup" && (!name.trim() || !phone.trim())) return setErr(t("needContacts"));
@@ -516,6 +547,7 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
         total,
         status: "new",
         paymentMethod: "at_table",
+        captcha: captchaToken,
       });
       if (clearBooking) clearBooking();
     } else {
@@ -530,6 +562,7 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
         total,
         status: "new",
         paymentMethod: "at_table",
+        captcha: captchaToken,
       });
     }
     setSending(false);
@@ -639,6 +672,20 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
                 </div>
               )}
               <Field label={t("comment")} value={comment} onChange={setComment} ph={t("commentPh")} area />
+              {/* Turnstile invisible widget */}
+              <div
+              className="cf-turnstile"
+              data-sitekey="YOUR_SITE_KEY_FROM_CLOUDFLARE"
+              data-callback="onTurnstileSuccess"
+              data-theme="light"
+              />
+              <div
+               ref={turnstileRef}
+               className="cf-turnstile"
+               data-sitekey="YOUR_SITE_KEY_FROM_CLOUDFLARE"
+               data-callback="onTurnstileVerified"
+               data-theme="light"
+               />
               {err && <div className="text-sm font-bold rounded-lg px-3 py-2" style={{ background: "#FAE5E3", color: "#933A34" }}>{err}</div>}
               <div className="rounded-xl p-3 text-sm" style={{ background: P.card, border: `1px solid ${P.line}` }}>
                 {entries.map(({ item, q }) => (
@@ -1183,26 +1230,61 @@ function GuestSite({ lang, setLang, t, menu, cart, setQty, openCart, cartCount, 
 
 /* ── admin: pieces ───────────────────────────────────────────────────── */
 function PinGate({ onOk, lang, goSite }) {
-  const [pin, setPin] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [err, setErr] = useState(false);
-  const tryIn = () => { if (pin === ADMIN_PIN) onOk(); else { setErr(true); setPin(""); } };
+  const [loading, setLoading] = useState(false);
+
+  // Check if already logged in from a previous session
+  useEffect(() => {
+    const existing = localStorage.getItem("aspan-token");
+    if (existing) onOk();
+  }, [onOk]);
+
+  const tryIn = async () => {
+    if (!username.trim() || !password.trim()) return;
+    setLoading(true);
+    setErr(false);
+    const token = await apiLogin(username, password);
+    setLoading(false);
+    if (token) onOk();
+    else { setErr(true); setPassword(""); }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center px-4" style={{ background: P.ink }}>
       <div className="w-full max-w-xs rounded-2xl p-6 text-center" style={{ background: P.ink2, border: "1px solid rgba(255,255,255,.1)" }}>
         <Ornament color={P.saff} w={44} />
         <div className="font-extrabold mt-2" style={{ fontFamily: FONT_DISPLAY, color: "#fff" }}>ASPAN · Staff</div>
         <div className="text-xs mt-1 mb-4" style={{ color: "rgba(255,255,255,.5)" }}>
-          {lang === "en" ? "Enter staff PIN (demo: 1234)" : "Введите PIN персонала (демо: 1234)"}
+          {lang === "en" ? "Sign in to manage the café" : "Войдите для управления кафе"}
         </div>
-        <input type="password" inputMode="numeric" value={pin}
-          onChange={(e) => { setPin(e.target.value); setErr(false); }}
+        <input
+          type="text"
+          value={username}
+          onChange={(e) => { setUsername(e.target.value); setErr(false); }}
           onKeyDown={(e) => e.key === "Enter" && tryIn()}
-          className="w-full text-center text-2xl tracking-widest rounded-xl px-3 py-3 outline-none font-extrabold"
+          className="w-full text-center rounded-xl px-3 py-3 outline-none font-bold mb-2"
           style={{ background: "rgba(255,255,255,.08)", color: "#fff", border: `1px solid ${err ? P.red : "rgba(255,255,255,.15)"}` }}
-          placeholder="••••" />
-        {err && <div className="text-xs font-bold mt-2" style={{ color: "#F09595" }}>{lang === "en" ? "Wrong PIN" : "Неверный PIN"}</div>}
-        <button onClick={tryIn} className="w-full mt-4 py-3 rounded-xl font-extrabold" style={{ background: P.teal, color: "#fff" }}>
-          {lang === "en" ? "Sign in" : "Войти"}
+          placeholder={lang === "en" ? "Username" : "Логин"}
+          autoComplete="username"
+        />
+        <input
+          type="password"
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); setErr(false); }}
+          onKeyDown={(e) => e.key === "Enter" && tryIn()}
+          className="w-full text-center rounded-xl px-3 py-3 outline-none font-bold"
+          style={{ background: "rgba(255,255,255,.08)", color: "#fff", border: `1px solid ${err ? P.red : "rgba(255,255,255,.15)"}` }}
+          placeholder="••••••"
+          autoComplete="current-password"
+        />
+        {err && <div className="text-xs font-bold mt-2" style={{ color: "#F09595" }}>
+          {lang === "en" ? "Wrong username or password" : "Неверный логин или пароль"}
+        </div>}
+        <button onClick={tryIn} disabled={loading} className="w-full mt-4 py-3 rounded-xl font-extrabold"
+          style={{ background: P.teal, color: "#fff", opacity: loading ? 0.6 : 1 }}>
+          {loading ? "…" : (lang === "en" ? "Sign in" : "Войти")}
         </button>
         <button onClick={goSite} className="mt-3 text-xs font-bold" style={{ color: "rgba(255,255,255,.5)" }}>
           ← {lang === "en" ? "Back to the site" : "Назад на сайт"}
@@ -1489,6 +1571,12 @@ const handleSaveItems = async (id, items, total) => {
               style={{ background: tab === id ? P.teal : "rgba(255,255,255,.08)", color: "#fff" }}>
               {label}
             </button>
+            <button
+  onClick={() => { localStorage.removeItem("aspan-token"); window.location.reload(); }}
+  className="text-xs font-bold px-3 py-1.5 rounded-full"
+  style={{ background: "rgba(255,255,255,.12)", color: "#fff" }}>
+  🚪 {L("Logout", "Выйти")}
+</button>
           ))}
         </div>
       </header>
@@ -1882,4 +1970,5 @@ export default function App() {
       )}
     </div>
   );
+
 }

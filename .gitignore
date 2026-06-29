@@ -26,3 +26,5 @@ Backendone/venv/
 venv/
 __pycache__/
 *.pyc
+.env
+Backendone/database.db

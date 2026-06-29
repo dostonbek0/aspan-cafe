@@ -1,8 +1,11 @@
-import sqlite3
+import os, psycopg
+from psycopg.rows import dict_row
+from dotenv import load_dotenv
 
-DB = "database.db"
+load_dotenv()  # ← this reads your .env file
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 def get_db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     return conn
