@@ -465,7 +465,6 @@ function mapLinks(lat, lng) {
 function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, lastOrder, orders, refreshOrders, resetAfterOrder, booking, clearBooking }) {
   const [step, setStep] = useState("cart");
   const [type, setType] = useState("table");
-  const [captchaToken, setCaptchaToken] = useState("");
   const turnstileRef = React.useRef(null);
   const [table, setTable] = useState("");
   const [name, setName] = useState("");
@@ -473,6 +472,7 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   const [comment, setComment] = useState("");
   const [err, setErr] = useState("");
   const [sending, setSending] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState("");
   const [location, setLocation] = useState(null);
   const [locLoading, setLocLoading] = useState(false);
   const [locErr, setLocErr] = useState("");
@@ -520,10 +520,10 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   // No payment gateway, no awaiting_confirmation step. Kitchen sees it immediately.
   const submitOrder = async () => {
     setErr("");
-//     if (!captchaToken) {
-//       setErr(lang === "en" ? "Please complete the security check." : "Пройдите проверку безопасности.");
-//       return;
-//     }
+    if (!captchaToken) {
+      setErr(lang === "en" ? "Please complete the security check." : "Пройдите проверку безопасности.");
+      return;
+    }
 
     if (!booking) {
       if (type === "table" && !table.trim()) return setErr(t("needTable"));
@@ -672,12 +672,6 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
               )}
               <Field label={t("comment")} value={comment} onChange={setComment} ph={t("commentPh")} area />
               {/* Turnstile invisible widget */}
-              <div
-              className="cf-turnstile"
-              data-sitekey="YOUR_SITE_KEY_FROM_CLOUDFLARE"
-              data-callback="onTurnstileSuccess"
-              data-theme="light"
-              />
               <div
                ref={turnstileRef}
                className="cf-turnstile"
