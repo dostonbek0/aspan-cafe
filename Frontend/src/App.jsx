@@ -473,7 +473,6 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   const [comment, setComment] = useState("");
   const [err, setErr] = useState("");
   const [sending, setSending] = useState(false);
-  const [captchaToken, setCaptchaToken] = useState("");
   const [location, setLocation] = useState(null);
   const [locLoading, setLocLoading] = useState(false);
   const [locErr, setLocErr] = useState("");
