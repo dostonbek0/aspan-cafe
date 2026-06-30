@@ -520,10 +520,10 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   // No payment gateway, no awaiting_confirmation step. Kitchen sees it immediately.
   const submitOrder = async () => {
     setErr("");
-    if (!captchaToken) {
-      setErr(lang === "en" ? "Please complete the security check." : "Пройдите проверку безопасности.");
-      return;
-    }
+//     if (!captchaToken) {
+//       setErr(lang === "en" ? "Please complete the security check." : "Пройдите проверку безопасности.");
+//       return;
+//     }
 
     if (!booking) {
       if (type === "table" && !table.trim()) return setErr(t("needTable"));
@@ -681,7 +681,7 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
               <div
                ref={turnstileRef}
                className="cf-turnstile"
-               data-sitekey="YOUR_SITE_KEY_FROM_CLOUDFLARE"
+               data-sitekey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
                data-callback="onTurnstileVerified"
                data-theme="light"
                />
