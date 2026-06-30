@@ -1571,12 +1571,13 @@ const handleSaveItems = async (id, items, total) => {
               style={{ background: tab === id ? P.teal : "rgba(255,255,255,.08)", color: "#fff" }}>
               {label}
             </button>
+            ))}
             <button
-  onClick={() => { localStorage.removeItem("aspan-token"); window.location.reload(); }}
-  className="text-xs font-bold px-3 py-1.5 rounded-full"
-  style={{ background: "rgba(255,255,255,.12)", color: "#fff" }}>
-  🚪 {L("Logout", "Выйти")}
-</button>
+             onClick={() => { localStorage.removeItem("aspan-token"); window.location.reload(); }}
+             className="text-xs font-bold px-3 py-1.5 rounded-full"
+             style={{ background: "rgba(255,255,255,.12)", color: "#fff" }}>
+  🚪         {L("Logout", "Выйти")}
+            </button>
           ))}
         </div>
       </header>
