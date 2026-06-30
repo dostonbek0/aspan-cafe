@@ -1578,7 +1578,6 @@ const handleSaveItems = async (id, items, total) => {
              style={{ background: "rgba(255,255,255,.12)", color: "#fff" }}>
   🚪         {L("Logout", "Выйти")}
             </button>
-          ))}
         </div>
       </header>
 
