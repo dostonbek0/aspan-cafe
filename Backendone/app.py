@@ -27,23 +27,23 @@ def init_db():
     conn.execute("""
         CREATE TABLE IF NOT EXISTS menu (
             id TEXT PRIMARY KEY,
-            data TEXT NOT NULL
+            data JSONB NOT NULL
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS orders (
             id TEXT PRIMARY KEY,
             num INTEGER NOT NULL,
-            ts INTEGER NOT NULL,
+            ts BIGINT NOT NULL,
             status TEXT NOT NULL,
             payment_id TEXT,
-            data TEXT NOT NULL
+            data JSONB NOT NULL
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
-            data TEXT NOT NULL
+            data JSONB NOT NULL
         )
     """)
     conn.commit()
@@ -64,7 +64,7 @@ def get_menu():
     conn = get_db()
     rows = conn.execute("SELECT data FROM menu").fetchall()
     conn.close()
-    items = [json.loads(r["data"]) for r in rows]
+    items = [r["data"] for r in rows]
     return jsonify(items)
 
 @app.route("/api/menu", methods=["POST"])
@@ -75,7 +75,7 @@ def save_menu():
     conn.execute("DELETE FROM menu")
     for item in items:
         conn.execute(
-            "INSERT INTO menu (id, data) VALUES (?, ?)",
+            "INSERT INTO menu (id, data) VALUES (%s, %s)",
             (item["id"], json.dumps(item))
         )
     conn.commit()
@@ -93,7 +93,7 @@ def get_orders():
         "ORDER BY ts DESC"
     ).fetchall()
     conn.close()
-    return jsonify([json.loads(r["data"]) for r in rows])
+    return jsonify([r["data"] for r in rows])
 
 
 # 1. Standalone Turnstile Helper Function (No decorators here!)
@@ -117,13 +117,13 @@ def place_order():
 
     conn = get_db()
     settings_row = conn.execute("SELECT data FROM settings WHERE key='cafe_status'").fetchone()
-    if settings_row and not json.loads(settings_row["data"]).get("isOpen", True):
+    if settings_row and not settings_row["data"].get("isOpen", True):
         conn.close()
         return jsonify({"error": "closed"}), 403
 
     order = request.get_json()
     conn.execute(
-        "INSERT INTO orders (id, num, ts, status, payment_id, data) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO orders (id, num, ts, status, payment_id, data) VALUES (%s, %s, %s, %s, %s, %s)",
         (order["id"], order["num"], order["ts"], order["status"],
          order.get("payment_id"), json.dumps(order))
     )
@@ -138,15 +138,15 @@ def update_order(order_id):
     new_status = body["status"]
     conn = get_db()
     row = conn.execute(
-        "SELECT data FROM orders WHERE id = ?", (order_id,)
+        "SELECT data FROM orders WHERE id = %s", (order_id,)
     ).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Not found"}), 404
-    order = json.loads(row["data"])
+    order = row["data"]
     order["status"] = new_status
     conn.execute(
-        "UPDATE orders SET status = ?, data = ? WHERE id = ?",
+        "UPDATE orders SET status = %s, data = %s WHERE id = %s",
         (new_status, json.dumps(order), order_id)
     )
     conn.commit()
@@ -157,7 +157,7 @@ def update_order(order_id):
 def order_status(order_id):
     conn = get_db()
     row = conn.execute(
-        "SELECT status FROM orders WHERE id = ?", (order_id,)
+        "SELECT status FROM orders WHERE id = %s", (order_id,)
     ).fetchone()
     conn.close()
     return (jsonify({"status": row["status"]}) if row
@@ -178,7 +178,7 @@ def check_availability():
     conn.close()
     booked = []
     for r in rows:
-        o = json.loads(r["data"])
+        o = r["data"]
         if o.get("type") != "booking":
             continue
         b = o.get("booking") or {}
@@ -197,7 +197,7 @@ def get_cafe_settings():
     if not row:
         return jsonify(
             {"isOpen": True, "hours": {i: "08:00-23:00" for i in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}})
-    return jsonify(json.loads(row["data"]))
+    return jsonify(row["data"])
 
 
 @app.route("/api/settings/cafe", methods=["PUT"])
@@ -205,7 +205,10 @@ def get_cafe_settings():
 def update_cafe_settings():
     body = request.get_json()
     conn = get_db()
-    conn.execute("INSERT OR REPLACE INTO settings (key, data) VALUES ('cafe_status', ?)", (json.dumps(body),))
+    conn.execute("""
+        INSERT INTO settings (key, data) VALUES ('cafe_status', %s)
+        ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data
+    """, (json.dumps(body),))
     conn.commit()
     conn.close()
     return jsonify({"ok": True})
@@ -220,12 +223,12 @@ def edit_order_items(order_id):
     new_total = body.get("newTotal", 0)
     conn = get_db()
 
-    row = conn.execute("SELECT data FROM orders WHERE id=?", (order_id,)).fetchone()
+    row = conn.execute("SELECT data FROM orders WHERE id=%s", (order_id,)).fetchone()
     if not row:
         conn.close()
         return jsonify({"error": "Not found"}), 404
 
-    old_order = json.loads(row["data"])
+    old_order = row["data"]
     old_total = old_order.get("total", 0)
 
     # Safely recalculate 2% fee difference (Hardcoded to avoid cross-file errors)
@@ -238,13 +241,13 @@ def edit_order_items(order_id):
     old_order["total"] = new_total
     old_order["fee"] = new_fee
 
-    conn.execute("UPDATE orders SET data=? WHERE id=?", (json.dumps(old_order), order_id))
+    conn.execute("UPDATE orders SET data=%s WHERE id=%s", (json.dumps(old_order), order_id))
 
     # Adjust Platform Ledger if fee changed
     if fee_diff != 0:
         conn.execute("""
-            UPDATE ledger 
-            SET accrued = accrued + ?, balance = balance + ? 
+            UPDATE ledger
+            SET accrued = accrued + %s, balance = balance + %s
             WHERE id = (SELECT id FROM ledger LIMIT 1)
         """, (fee_diff, fee_diff))
 
