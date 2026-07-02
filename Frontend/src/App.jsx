@@ -174,6 +174,14 @@ const T = {
     bookNoPay: "Book now (Pay at cafe)",
     placeOrderFinal: "Place order (Pay at cafe)",
     addrConfirmNote: "Please double-check your address above. If anything looks wrong, edit it before sending.",
+    tlTitle: "Order progress", tlReceived: "Order received", tlPreparing: "Preparing",
+    tlReady: "Ready", tlDone: "Completed", tlCancelled: "Cancelled", minShort: "min",
+    beingPrepared: "Your order is being prepared", estRemaining: "Estimated time remaining",
+    almostReady: "Almost ready — any moment now", notifTitle: "Notifications",
+    ntfCooking: "Your order is being prepared. Estimated time: {m} minutes.",
+    ntfCookingNoTime: "Your order is being prepared.",
+    ntfReady: "Your order is ready.", ntfDone: "Order completed. Thank you.",
+    ntfCancelled: "Your order has been cancelled.",
   },
   ru: {
     menu: "Меню", about: "О нас", contacts: "Контакты", cart: "Корзина",
@@ -228,6 +236,14 @@ const T = {
     bookNoPay: "Забронировать (Оплата в кафе)",
     placeOrderFinal: "Отправить заказ (Оплата в кафе)",
     addrConfirmNote: "Пожалуйста, ещё раз проверьте адрес выше. Если что-то неверно — исправьте перед отправкой.",
+    tlTitle: "Ход заказа", tlReceived: "Заказ принят", tlPreparing: "Готовится",
+    tlReady: "Готов", tlDone: "Завершён", tlCancelled: "Отменён", minShort: "мин",
+    beingPrepared: "Ваш заказ готовится", estRemaining: "Осталось примерно",
+    almostReady: "Почти готово — уже совсем скоро", notifTitle: "Уведомления",
+    ntfCooking: "Ваш заказ готовится. Примерное время: {m} минут.",
+    ntfCookingNoTime: "Ваш заказ готовится.",
+    ntfReady: "Ваш заказ готов.", ntfDone: "Заказ завершён. Спасибо!",
+    ntfCancelled: "Ваш заказ отменён.",
   },
   kz: {
     menu: "Мәзір", about: "Біз туралы", contacts: "Байланыс", cart: "Себет",
@@ -282,6 +298,14 @@ const T = {
     bookNoPay: "Брондау (Кафеде төлеу)",
     placeOrderFinal: "Тапсырысты жіберу (Кафеде төлеу)",
     addrConfirmNote: "Жоғарыдағы мекенжайды тағы тексеріңіз. Қате болса — жіберу алдында түзетіңіз.",
+    tlTitle: "Тапсырыс барысы", tlReceived: "Тапсырыс қабылданды", tlPreparing: "Дайындалуда",
+    tlReady: "Дайын", tlDone: "Аяқталды", tlCancelled: "Болдырылмады", minShort: "мин",
+    beingPrepared: "Тапсырысыңыз дайындалуда", estRemaining: "Шамамен қалды",
+    almostReady: "Дайын болуға жақын", notifTitle: "Хабарламалар",
+    ntfCooking: "Тапсырысыңыз дайындалуда. Шамамен уақыты: {m} минут.",
+    ntfCookingNoTime: "Тапсырысыңыз дайындалуда.",
+    ntfReady: "Тапсырысыңыз дайын.", ntfDone: "Тапсырыс аяқталды. Рақмет!",
+    ntfCancelled: "Тапсырысыңыз болдырылмады.",
   },
 };
 
@@ -317,8 +341,16 @@ async function apiPlaceOrder(order) {
   try { await fetch(`${API}/api/orders`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(order) }); return true; }
   catch (e) { return false; }
 }
-async function apiUpdateStatus(id, status) {
-  try { await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ status }) }); return true; }
+async function apiUpdateStatus(id, status, extra) {
+  try { await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ status, ...(extra || {}) }) }); return true; }
+  catch (e) { return false; }
+}
+async function apiGetNotifications(orderId) {
+  try { const r = await fetch(`${API}/api/orders/${orderId}/notifications`); return await r.json(); }
+  catch (e) { return []; }
+}
+async function apiMarkNotificationsRead(orderId) {
+  try { await fetch(`${API}/api/orders/${orderId}/notifications/read`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); return true; }
   catch (e) { return false; }
 }
 async function apiConfirmPayment(id) {
@@ -392,6 +424,20 @@ const StatusPill = ({ s, lang }) => {
   return <Pill bg={st.bg} fg={st.fg}>{st[lang]}</Pill>;
 };
 
+// Re-renders on an interval so countdowns tick down without any network calls.
+function useNowTick(active, ms = 15000) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(t);
+  }, [active, ms]);
+  return now;
+}
+
+const prepMinutesLeft = (estimatedReadyAt, now) => Math.ceil((estimatedReadyAt - now) / 60000);
+
 const QtyControl = ({ qty, onMinus, onPlus, dark }) => (
   <div className="flex items-center gap-2">
     <button onClick={onMinus} aria-label="minus" className="w-8 h-8 rounded-full font-bold text-lg leading-none"
@@ -458,6 +504,61 @@ function mapLinks(lat, lng) {
     gis: `https://2gis.kz/geo/${lng},${lat}`,
     google: `https://maps.google.com/?q=${lat},${lng}`,
   };
+}
+
+/* ── guest: order tracking (countdown, timeline, notifications) ──────── */
+
+// Customer-facing countdown while the order is PREPARING.
+function PrepCountdownCustomer({ live, t }) {
+  const now = useNowTick(true, 15000);
+  const left = prepMinutesLeft(live.estimated_ready_at, now);
+  return (
+    <div className="mt-4 rounded-xl p-4 inline-flex flex-col items-center gap-1" style={{ background: "#FBEFD9", border: "1px solid #E8D9B5" }}>
+      <div className="text-sm font-extrabold" style={{ color: "#8A5A12" }}>🍳 {t("beingPrepared")}</div>
+      <div className="text-xs font-bold" style={{ color: "#8A5A12" }}>
+        {left > 0 ? `${t("estRemaining")}: ${left} ${t("minShort")}` : t("almostReady")}
+      </div>
+    </div>
+  );
+}
+
+// Order history: received → preparing → ready → completed (or cancelled).
+function OrderTimeline({ o, t }) {
+  const cancelled = o.status === "cancelled";
+  const reachedPrep = !!o.preparation_started_at || ["cooking", "ready", "done"].includes(o.status);
+  const reachedReady = !!o.ready_at || ["ready", "done"].includes(o.status);
+  const reachedDone = !!o.completed_at || o.status === "done";
+  const steps = [
+    { icon: "✓", label: t("tlReceived"), on: true, ts: o.ts },
+    { icon: "🍳", label: t("tlPreparing") + (o.preparation_minutes ? ` (${o.preparation_minutes} ${t("minShort")})` : ""), on: reachedPrep, ts: o.preparation_started_at },
+    { icon: "🔔", label: t("tlReady"), on: reachedReady, ts: o.ready_at },
+    { icon: "✓", label: t("tlDone"), on: reachedDone, ts: o.completed_at },
+  ];
+  if (cancelled) steps.push({ icon: "✕", label: t("tlCancelled"), on: true, ts: o.cancelled_at, red: true });
+  return (
+    <div className="mt-5 mx-auto text-left rounded-xl p-4" style={{ background: P.card, border: `1px solid ${P.line}`, maxWidth: 280 }}>
+      <div className="text-xs font-bold uppercase tracking-wide mb-2" style={{ color: P.sub }}>{t("tlTitle")}</div>
+      {steps.map((s, i) => (
+        <div key={i} className="flex items-center gap-2 py-1" style={{ opacity: s.on ? 1 : 0.35 }}>
+          <span style={{ width: 20, textAlign: "center" }}>{s.icon}</span>
+          <span className="text-sm font-bold" style={{ color: s.red ? "#933A34" : P.txt }}>{s.label}</span>
+          {s.on && s.ts ? <span className="text-xs ml-auto pl-3" style={{ color: P.sub }}>{timeOf(s.ts)}</span> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Localizes a stored notification via its status; falls back to the raw message.
+function ntfText(n, order, t) {
+  if (n.status === "cooking") {
+    const m = order && order.preparation_minutes;
+    return m ? t("ntfCooking").replace("{m}", m) : t("ntfCookingNoTime");
+  }
+  if (n.status === "ready") return t("ntfReady");
+  if (n.status === "done") return t("ntfDone");
+  if (n.status === "cancelled") return t("ntfCancelled");
+  return n.message;
 }
 
 /* ── guest: cart drawer (cart → checkout → confirmation) ─────────────── */
@@ -541,8 +642,33 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   }, [open, step]);
   useEffect(() => { if (open && lastOrder && step === "done") { const tm = setInterval(refreshOrders, 10000); return () => clearInterval(tm); } }, [open, step, lastOrder, refreshOrders]);
   useEffect(() => {
-    if (open && step !== "done") setStep(booking ? "checkout" : (entries.length ? step : "cart"));
+    if (open && step !== "done") {
+      if (booking) setStep("checkout");
+      else if (entries.length) setStep(step);
+      // No cart but a tracked order exists → reopen straight into tracking
+      // (also for just-finished orders, so the final notification is seen).
+      else if (live && ["new", "cooking", "ready", "done", "cancelled"].includes(live.status)) setStep("done");
+      else setStep("cart");
+    }
   }, [open]);
+
+  // Status-change notifications for the tracked order (poll at 20s to stay
+  // well under the API rate limit; countdowns tick locally without network).
+  const [ntfs, setNtfs] = useState([]);
+  const liveId = live ? live.id : null;
+  useEffect(() => {
+    if (!(open && step === "done" && liveId)) return;
+    let stop = false;
+    const load = async () => {
+      const list = await apiGetNotifications(liveId);
+      if (stop || !Array.isArray(list)) return;
+      setNtfs(list);
+      if (list.some((n) => !n.read_status)) apiMarkNotificationsRead(liveId);
+    };
+    load();
+    const tm = setInterval(load, 20000);
+    return () => { stop = true; clearInterval(tm); };
+  }, [open, step, liveId]);
 
   // Every order — booking or regular — is placed as a normal order, paid at the cafe.
   // No payment gateway, no awaiting_confirmation step. Kitchen sees it immediately.
@@ -737,6 +863,24 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
                   ↻ {t("refresh")}
                 </button>
               </div>
+              {live.status === "cooking" && live.estimated_ready_at ? (
+                <div><PrepCountdownCustomer live={live} t={t} /></div>
+              ) : null}
+              <OrderTimeline o={live} t={t} />
+              {ntfs.length > 0 && (
+                <div className="mt-4 mx-auto text-left rounded-xl p-4" style={{ background: P.card, border: `1px solid ${P.line}`, maxWidth: 280 }}>
+                  <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: P.sub }}>🔔 {t("notifTitle")}</div>
+                  {ntfs.slice().reverse().map((n) => (
+                    <div key={n.id} className="flex items-start gap-2 py-1.5" style={{ borderTop: `1px solid ${P.line}` }}>
+                      {!n.read_status && <span className="mt-1.5 rounded-full flex-shrink-0" style={{ background: P.teal, width: 8, height: 8 }} />}
+                      <div className="text-sm" style={{ color: P.txt, fontWeight: n.read_status ? 500 : 800 }}>
+                        {ntfText(n, live, t)}
+                        <div className="text-xs mt-0.5" style={{ color: P.sub, fontWeight: 500 }}>{timeOf(n.ts)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="mt-6">
                 <button onClick={() => { resetAfterOrder(); setStep("cart"); setTable(""); setComment(""); setAddress(""); setLocation(null); setLocErr(""); }}
                   className="font-bold text-sm px-4 py-2 rounded-full" style={{ background: P.ink, color: "#fff" }}>
@@ -1309,8 +1453,73 @@ function PinGate({ onOk, lang, goSite }) {
   );
 }
 
+const PREP_PRESETS = [10, 15, 20, 30, 45, 60];
+
+// Small dialog asking the waiter for the estimated preparation time (minutes)
+// before a NEW order moves to PREPARING. Reuses the existing modal pattern.
+function PrepTimeModal({ lang, onClose, onStart }) {
+  const [mins, setMins] = useState(15);
+  const [custom, setCustom] = useState("");
+  const chosen = custom.trim() ? Number(custom.replace(/\D/g, "")) : mins;
+  const ok = chosen > 0 && chosen <= 240;
+  const L = (en, ru) => (lang === "en" ? en : ru);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" role="dialog">
+      <div className="absolute inset-0" style={{ background: "rgba(14,22,32,.55)" }} onClick={onClose} />
+      <div className="relative w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl p-5" style={{ background: P.bone }}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="font-extrabold" style={{ fontFamily: FONT_DISPLAY, color: P.txt }}>
+            ⏱ {L("Estimated preparation time", "Примерное время приготовления")}
+          </div>
+          <button onClick={onClose} className="w-9 h-9 rounded-full font-bold" style={{ background: P.card, border: `1px solid ${P.line}` }}>✕</button>
+        </div>
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          {PREP_PRESETS.map((m) => {
+            const active = !custom.trim() && mins === m;
+            return (
+              <button key={m} onClick={() => { setMins(m); setCustom(""); }}
+                className="rounded-xl py-2.5 font-extrabold text-sm"
+                style={{ background: active ? P.ink : P.card, color: active ? "#fff" : P.txt, border: `1px solid ${active ? P.ink : P.line}` }}>
+                {m} {L("min", "мин")}
+              </button>
+            );
+          })}
+        </div>
+        <Field label={L("Custom time, minutes", "Своё время, минут")} value={custom}
+          onChange={(v) => setCustom(v.replace(/\D/g, ""))} ph="25" />
+        <div className="flex gap-2 mt-4">
+          <button onClick={onClose} className="flex-1 py-3 rounded-xl font-bold" style={{ background: P.card, border: `1px solid ${P.line}`, color: P.txt }}>
+            {L("Cancel", "Отмена")}
+          </button>
+          <button disabled={!ok} onClick={() => onStart(chosen)} className="flex-1 py-3 rounded-xl font-extrabold"
+            style={{ background: ok ? P.teal : P.line, color: ok ? "#fff" : P.sub }}>
+            🍳 {L("Start Cooking", "Начать готовить")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Live countdown chip shown on the admin card while an order is PREPARING.
+function PrepCountdownAdmin({ o, lang }) {
+  const now = useNowTick(true, 15000);
+  const left = prepMinutesLeft(o.estimated_ready_at, now);
+  return (
+    <div className="text-xs font-bold mt-2 rounded-lg px-3 py-2 inline-block" style={{ background: "#FBEFD9", color: "#8A5A12" }}>
+      ⏱ {left > 0
+        ? (lang === "en" ? `Ready in approximately ${left} min` : `Готов примерно через ${left} мин`)
+        : (lang === "en" ? "Time is up — mark it ready" : "Время вышло — отметьте готовность")}
+      {o.preparation_minutes ? <span style={{ opacity: 0.7 }}> · {o.preparation_minutes} {lang === "en" ? "min total" : "мин всего"}</span> : null}
+    </div>
+  );
+}
+
 function OrderCard({ o, lang, onStatus, onEditItems }) {
+  const [askPrep, setAskPrep] = useState(false);
   const next = { new: ["cooking", lang === "en" ? "Start cooking" : "В работу"], cooking: ["ready", lang === "en" ? "Mark ready" : "Готов"], ready: ["done", lang === "en" ? "Complete" : "Завершить"] }[o.status];
+  // A NEW order first asks for the preparation time; other transitions go straight through.
+  const advance = () => { if (o.status === "new") setAskPrep(true); else onStatus(o.id, next[0]); };
   return (
     <div className="rounded-2xl p-4" style={{ background: P.card, border: `1px solid ${P.line}` }}>
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1364,6 +1573,7 @@ function OrderCard({ o, lang, onStatus, onEditItems }) {
         ))}
         {o.comment && <div className="text-xs mt-2 font-bold" style={{ color: P.tealD }}>💬 {o.comment}</div>}
       </div>
+      {o.status === "cooking" && o.estimated_ready_at && <PrepCountdownAdmin o={o} lang={lang} />}
       {/* EDIT ITEMS BUTTON */}
       {(o.status === "new" || o.status === "cooking") && (
         <button onClick={onEditItems} className="text-xs font-bold px-3 py-2 rounded-full mb-3" style={{ background: P.bone, border: `1px solid ${P.line}`, color: P.txt }}>
@@ -1380,12 +1590,16 @@ function OrderCard({ o, lang, onStatus, onEditItems }) {
             </button>
           )}
           {next && (
-            <button onClick={() => onStatus(o.id, next[0])} className="text-xs font-extrabold px-4 py-2 rounded-full" style={{ background: P.teal, color: "#fff" }}>
+            <button onClick={advance} className="text-xs font-extrabold px-4 py-2 rounded-full" style={{ background: P.teal, color: "#fff" }}>
               {next[1]} →
             </button>
           )}
         </div>
       </div>
+      {askPrep && (
+        <PrepTimeModal lang={lang} onClose={() => setAskPrep(false)}
+          onStart={(m) => { setAskPrep(false); onStatus(o.id, "cooking", { preparation_minutes: m }); }} />
+      )}
     </div>
   );
 }
@@ -1879,6 +2093,12 @@ export default function App() {
       else { setMenu(SEED); await apiSaveMenu(SEED); }
       const o = await apiGetOrders();
       setOrders(Array.isArray(o) ? o : []);
+      // Restore order tracking after a reload (last 24h only) so the customer
+      // keeps seeing status updates and notifications for their active order.
+      try {
+        const saved = JSON.parse(localStorage.getItem("aspan-last-order") || "null");
+        if (saved && saved.id && Date.now() - (saved.ts || 0) < 24 * 3600 * 1000) setLastOrder(saved);
+      } catch (e) {}
       try { const raw = localStorage.getItem(IMAGES_KEY); if (raw) setImages(JSON.parse(raw)); } catch (e) {}
 
       const status = await apiGetCafeStatus();
@@ -1918,13 +2138,19 @@ export default function App() {
     await apiPlaceOrder(order);
     setOrders((prev) => [order, ...prev]);
     setLastOrder(order);
+    try { localStorage.setItem("aspan-last-order", JSON.stringify({ id: order.id, num: order.num, ts: order.ts })); } catch (e) {}
     setCart({});
     return order; // ← return so CartDrawer can get the id
   }, []);
 
-  const updateStatus = useCallback(async (id, status) => {
-    await apiUpdateStatus(id, status);
-    setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status } : o));
+  const updateStatus = useCallback(async (id, status, extra) => {
+    await apiUpdateStatus(id, status, extra);
+    // Optimistic mirror of the server-side prep fields so the countdown
+    // shows immediately; the next orders poll overwrites with server values.
+    const prep = extra && extra.preparation_minutes
+      ? { preparation_minutes: extra.preparation_minutes, preparation_started_at: Date.now(), estimated_ready_at: Date.now() + extra.preparation_minutes * 60000 }
+      : {};
+    setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status, ...prep } : o));
   }, []);
 
   const cartCount = Object.values(cart).reduce((s, q) => s + q, 0);

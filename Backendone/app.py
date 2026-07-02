@@ -4,6 +4,7 @@ from flask_cors import CORS
 import sqlite3
 import json
 import os
+import time
 
 app = Flask(__name__)
 from flask_limiter import Limiter
@@ -44,6 +45,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
             data JSONB NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id SERIAL PRIMARY KEY,
+            order_id TEXT NOT NULL,
+            status TEXT,
+            message TEXT NOT NULL,
+            ts BIGINT NOT NULL,
+            read_status BOOLEAN NOT NULL DEFAULT FALSE
         )
     """)
     conn.commit()
@@ -131,6 +142,21 @@ def place_order():
     conn.close()
     return jsonify({"ok": True})
 
+# Customer-facing message created when the status changes (website notifications)
+def order_notification_message(status, prep_minutes=None):
+    if status == "cooking":
+        if prep_minutes:
+            return f"Your order is being prepared. Estimated time: {prep_minutes} minutes."
+        return "Your order is being prepared."
+    if status == "ready":
+        return "Your order is ready."
+    if status == "done":
+        return "Order completed. Thank you."
+    if status == "cancelled":
+        return "Your order has been cancelled."
+    return None
+
+
 @app.route("/api/orders/<order_id>", methods=["PUT"])
 @require_owner
 def update_order(order_id):
@@ -144,10 +170,60 @@ def update_order(order_id):
         conn.close()
         return jsonify({"error": "Not found"}), 404
     order = row["data"]
+    old_status = order.get("status")
     order["status"] = new_status
+
+    # Preparation window + per-step timestamps for the customer timeline
+    now_ms = int(time.time() * 1000)
+    if new_status == "cooking":
+        try:
+            prep_minutes = int(body.get("preparation_minutes") or 0)
+        except (TypeError, ValueError):
+            prep_minutes = 0
+        if prep_minutes > 0:
+            order["preparation_minutes"] = prep_minutes
+            order["preparation_started_at"] = now_ms
+            order["estimated_ready_at"] = now_ms + prep_minutes * 60000
+    elif new_status == "ready":
+        order["ready_at"] = now_ms
+    elif new_status == "done":
+        order["completed_at"] = now_ms
+    elif new_status == "cancelled":
+        order["cancelled_at"] = now_ms
+
     conn.execute(
         "UPDATE orders SET status = %s, data = %s WHERE id = %s",
         (new_status, json.dumps(order), order_id)
+    )
+    if new_status != old_status:
+        msg = order_notification_message(new_status, order.get("preparation_minutes"))
+        if msg:
+            conn.execute(
+                "INSERT INTO notifications (order_id, status, message, ts) VALUES (%s, %s, %s, %s)",
+                (order_id, new_status, msg, now_ms)
+            )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/orders/<order_id>/notifications", methods=["GET"])
+def order_notifications(order_id):
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, order_id, status, message, ts, read_status "
+        "FROM notifications WHERE order_id = %s ORDER BY ts ASC", (order_id,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/orders/<order_id>/notifications/read", methods=["POST"])
+def mark_notifications_read(order_id):
+    conn = get_db()
+    conn.execute(
+        "UPDATE notifications SET read_status = TRUE "
+        "WHERE order_id = %s AND read_status = FALSE", (order_id,)
     )
     conn.commit()
     conn.close()
