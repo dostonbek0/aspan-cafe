@@ -466,6 +466,7 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   const [step, setStep] = useState("cart");
   const [type, setType] = useState("table");
   const turnstileRef = React.useRef(null);
+  const turnstileWidgetId = React.useRef(null);
   const [table, setTable] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -511,6 +512,33 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
   useEffect(() => {
   window.onTurnstileVerified = (token) => setCaptchaToken(token);
   }, []);
+  // The Turnstile div only enters the DOM once the drawer reaches the
+  // checkout step, but the Cloudflare script only auto-scans the page
+  // once on initial load — so it never sees this element and no widget
+  // (and no token) ever appears. Render it explicitly instead.
+  useEffect(() => {
+    if (!open || step !== "checkout") return;
+    let cancelled = false;
+    const tryRender = () => {
+      if (cancelled) return;
+      const el = turnstileRef.current;
+      if (!el || !window.turnstile) {
+        setTimeout(tryRender, 100);
+        return;
+      }
+      if (turnstileWidgetId.current !== null) {
+        window.turnstile.reset(turnstileWidgetId.current);
+        return;
+      }
+      turnstileWidgetId.current = window.turnstile.render(el, {
+        sitekey: import.meta.env.VITE_TURNSTILE_SITE_KEY,
+        theme: "light",
+        callback: (token) => setCaptchaToken(token),
+      });
+    };
+    tryRender();
+    return () => { cancelled = true; };
+  }, [open, step]);
   useEffect(() => { if (open && lastOrder && step === "done") { const tm = setInterval(refreshOrders, 10000); return () => clearInterval(tm); } }, [open, step, lastOrder, refreshOrders]);
   useEffect(() => {
     if (open && step !== "done") setStep(booking ? "checkout" : (entries.length ? step : "cart"));
@@ -671,14 +699,8 @@ function CartDrawer({ open, onClose, cart, menu, lang, t, setQty, placeOrder, la
                 </div>
               )}
               <Field label={t("comment")} value={comment} onChange={setComment} ph={t("commentPh")} area />
-              {/* Turnstile invisible widget */}
-              <div
-               ref={turnstileRef}
-               className="cf-turnstile"
-               data-sitekey={import.meta.env.VITE_TURNSTILE_SITE_KEY}
-               data-callback="onTurnstileVerified"
-               data-theme="light"
-               />
+              {/* Turnstile widget — rendered explicitly via useEffect above */}
+              <div ref={turnstileRef} />
               {err && <div className="text-sm font-bold rounded-lg px-3 py-2" style={{ background: "#FAE5E3", color: "#933A34" }}>{err}</div>}
               <div className="rounded-xl p-3 text-sm" style={{ background: P.card, border: `1px solid ${P.line}` }}>
                 {entries.map(({ item, q }) => (
