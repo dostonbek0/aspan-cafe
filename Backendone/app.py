@@ -339,7 +339,16 @@ def edit_order_items(order_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "newTotal": new_total})
-init_db()
+
+
+# Schema setup runs at import so gunicorn triggers it too. A transient DB
+# hiccup here must not crash the whole deploy (gunicorn kills workers that
+# take too long to boot, and Render then marks the deploy failed): the
+# tables already exist after the first successful run, so log and move on.
+try:
+    init_db()
+except Exception as e:
+    print("init_db failed at boot (non-fatal, relying on existing schema):", e)
 if __name__ == "__main__":
     from payments import payments
 
