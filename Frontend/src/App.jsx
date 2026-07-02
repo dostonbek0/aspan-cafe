@@ -182,6 +182,10 @@ const T = {
     ntfCookingNoTime: "Your order is being prepared.",
     ntfReady: "Your order is ready.", ntfDone: "Order completed. Thank you.",
     ntfCancelled: "Your order has been cancelled.",
+    allOrders: "Orders", boardTitle: "Find your order",
+    boardEmpty: "No active orders right now",
+    boardHint: "Tap your order number to see the details.",
+    backToList: "All orders",
   },
   ru: {
     menu: "Меню", about: "О нас", contacts: "Контакты", cart: "Корзина",
@@ -244,6 +248,10 @@ const T = {
     ntfCookingNoTime: "Ваш заказ готовится.",
     ntfReady: "Ваш заказ готов.", ntfDone: "Заказ завершён. Спасибо!",
     ntfCancelled: "Ваш заказ отменён.",
+    allOrders: "Заказы", boardTitle: "Найдите свой заказ",
+    boardEmpty: "Активных заказов сейчас нет",
+    boardHint: "Нажмите на номер своего заказа, чтобы увидеть детали.",
+    backToList: "Все заказы",
   },
   kz: {
     menu: "Мәзір", about: "Біз туралы", contacts: "Байланыс", cart: "Себет",
@@ -306,6 +314,10 @@ const T = {
     ntfCookingNoTime: "Тапсырысыңыз дайындалуда.",
     ntfReady: "Тапсырысыңыз дайын.", ntfDone: "Тапсырыс аяқталды. Рақмет!",
     ntfCancelled: "Тапсырысыңыз болдырылмады.",
+    allOrders: "Тапсырыстар", boardTitle: "Тапсырысыңызды табыңыз",
+    boardEmpty: "Қазір белсенді тапсырыстар жоқ",
+    boardHint: "Мәліметтерді көру үшін тапсырыс нөміріңізді басыңыз.",
+    backToList: "Барлық тапсырыстар",
   },
 };
 
@@ -342,7 +354,17 @@ async function apiPlaceOrder(order) {
   catch (e) { return false; }
 }
 async function apiUpdateStatus(id, status, extra) {
-  try { await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ status, ...(extra || {}) }) }); return true; }
+  // Returns true on success, "auth" when the login token is expired/invalid,
+  // false on any other failure — callers must NOT pretend a failed write worked.
+  try {
+    const r = await fetch(`${API}/api/orders/${id}`, { method: "PUT", headers: authHeaders(), body: JSON.stringify({ status, ...(extra || {}) }) });
+    if (r.status === 401) return "auth";
+    return r.ok;
+  }
+  catch (e) { return false; }
+}
+async function apiCheckAuth() {
+  try { const r = await fetch(`${API}/api/auth/check`, { headers: authHeaders() }); return r.ok; }
   catch (e) { return false; }
 }
 async function apiGetNotifications(orderId) {
@@ -559,6 +581,110 @@ function ntfText(n, order, t) {
   if (n.status === "done") return t("ntfDone");
   if (n.status === "cancelled") return t("ntfCancelled");
   return n.message;
+}
+
+/* ── guest: public order board (find your order without an account) ──── */
+// Shows only order number, status, items and timing — no customer names,
+// phones or addresses are ever rendered here.
+function OrdersBoard({ open, onClose, orders, lang, t, refreshOrders }) {
+  const [selId, setSelId] = useState(null);
+  useEffect(() => {
+    if (!open) return;
+    setSelId(null);
+    refreshOrders();
+    const tm = setInterval(refreshOrders, 20000); // stays under the API rate limit
+    return () => clearInterval(tm);
+  }, [open, refreshOrders]);
+  if (!open) return null;
+
+  const active = orders
+    .filter((o) => ["new", "cooking", "ready"].includes(o.status))
+    .sort((a, b) => (a.num || 0) - (b.num || 0));
+  const sel = selId ? orders.find((o) => o.id === selId) : null;
+  // Spec colors: preparing → neutral grey, ready → green, new → plain card.
+  const colorOf = (s) => s === "ready"
+    ? { bg: "#E9F1DF", fg: "#3F6B2A", bd: "#BFD8A8" }
+    : s === "cooking"
+      ? { bg: "#EEEDEA", fg: "#6F7884", bd: P.line }
+      : { bg: P.card, fg: P.txt, bd: P.line };
+
+  return (
+    <div className="fixed inset-0 z-50" role="dialog" aria-label={t("boardTitle")}>
+      <div className="absolute inset-0" style={{ background: "rgba(14,22,32,.55)" }} onClick={onClose} />
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[420px] flex flex-col" style={{ background: P.bone }}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${P.line}` }}>
+          <div className="font-extrabold text-lg" style={{ fontFamily: FONT_DISPLAY, color: P.txt }}>
+            {sel ? `${t("orderNo")} №${sel.num}` : t("boardTitle")}
+          </div>
+          <button onClick={onClose} aria-label="close" className="w-9 h-9 rounded-full font-bold" style={{ background: P.card, border: `1px solid ${P.line}` }}>✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {!sel ? (
+            active.length === 0 ? (
+              <div className="text-center mt-16">
+                <div style={{ fontSize: 44 }}>🧾</div>
+                <div className="font-extrabold mt-2" style={{ color: P.txt }}>{t("boardEmpty")}</div>
+              </div>
+            ) : (
+              <>
+                <div className="text-sm mb-3" style={{ color: P.sub }}>{t("boardHint")}</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {active.map((o) => {
+                    const c = colorOf(o.status);
+                    return (
+                      <button key={o.id} onClick={() => setSelId(o.id)}
+                        className="rounded-xl py-3 font-extrabold flex flex-col items-center gap-1"
+                        style={{ background: c.bg, color: c.fg, border: `1px solid ${c.bd}` }}>
+                        <span style={{ fontFamily: FONT_DISPLAY }}>№{o.num}</span>
+                        <span className="text-xs font-bold" style={{ opacity: 0.8 }}>{(STATUS[o.status] || STATUS.new)[lang]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-4 mt-4 text-xs font-bold" style={{ color: P.sub }}>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="rounded-full inline-block" style={{ background: "#EEEDEA", border: `1px solid ${P.line}`, width: 12, height: 12 }} /> {STATUS.cooking[lang]}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span className="rounded-full inline-block" style={{ background: "#E9F1DF", border: "1px solid #BFD8A8", width: 12, height: 12 }} /> {STATUS.ready[lang]}
+                  </span>
+                </div>
+              </>
+            )
+          ) : (
+            <div>
+              <button onClick={() => setSelId(null)} className="text-xs font-bold px-3 py-1.5 rounded-full mb-4" style={{ background: P.card, border: `1px solid ${P.line}`, color: P.txt }}>
+                ← {t("backToList")}
+              </button>
+              <div className="flex items-center justify-between mb-1">
+                <StatusPill s={sel.status} lang={lang} />
+                <span className="text-xs" style={{ color: P.sub }}>{dateOf(sel.ts)} · {timeOf(sel.ts)}</span>
+              </div>
+              {sel.status === "cooking" && sel.estimated_ready_at ? (
+                <div className="text-center"><PrepCountdownCustomer live={sel} t={t} /></div>
+              ) : null}
+              {sel.items && sel.items.length > 0 && (
+                <div className="mt-4 rounded-xl p-3 text-sm" style={{ background: P.card, border: `1px solid ${P.line}` }}>
+                  {sel.items.map((it, i) => (
+                    <div key={i} className="flex justify-between py-0.5">
+                      <span style={{ color: P.sub }}>{pickL(it.name, lang)} × {it.qty}</span>
+                      <span className="font-bold" style={{ color: P.txt }}>{fmt(it.price * it.qty)}</span>
+                    </div>
+                  ))}
+                  {typeof sel.total === "number" && (
+                    <div className="flex justify-between pt-2 mt-1 font-extrabold" style={{ borderTop: `1px solid ${P.line}`, color: P.txt }}>
+                      <span>{t("total")}</span><span>{fmt(sel.total)}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              <div className="text-center"><OrderTimeline o={sel} t={t} /></div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /* ── guest: cart drawer (cart → checkout → confirmation) ─────────────── */
@@ -1183,7 +1309,7 @@ function BookingWizard({ open, onClose, lang, t, onProceed }) {
 
 /* ── guest site ──────────────────────────────────────────────────────── */
 
-function GuestSite({ lang, setLang, t, menu, cart, setQty, openCart, cartCount, cartTotal, goAdmin, lastOrder, orders, images, openBooking, cafeInfo }) {
+function GuestSite({ lang, setLang, t, menu, cart, setQty, openCart, cartCount, cartTotal, goAdmin, lastOrder, orders, images, openBooking, openBoard, cafeInfo }) {
   const [activeCat, setActiveCat] = useState("all");
   const [q, setQ] = useState("");
 
@@ -1225,6 +1351,10 @@ function GuestSite({ lang, setLang, t, menu, cart, setQty, openCart, cartCount, 
             <button onClick={() => setLang(nextLang(lang))} className="text-xs font-extrabold px-3 py-1.5 rounded-full"
               style={{ background: P.card, border: `1px solid ${P.line}` }}>
               🌐 {langCode(lang)}
+            </button>
+            <button onClick={openBoard} className="text-xs font-extrabold px-3 py-1.5 rounded-full"
+              style={{ background: P.card, border: `1px solid ${P.line}`, color: P.txt }}>
+              🧾 {t("allOrders")}
             </button>
             <button onClick={openCart} className="flex items-center gap-2 text-sm font-extrabold px-4 py-2 rounded-full" style={{ background: P.ink, color: "#fff" }}>
               🧺 {cartCount > 0 ? fmt(cartTotal) : t("cart")}
@@ -1394,10 +1524,20 @@ function PinGate({ onOk, lang, goSite }) {
   const [err, setErr] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Check if already logged in from a previous session
+  // Check if already logged in from a previous session — but validate the
+  // token server-side first: tokens expire after 12h, and entering with a
+  // dead one made every status update silently fail with 401.
   useEffect(() => {
     const existing = localStorage.getItem("aspan-token");
-    if (existing) onOk();
+    if (!existing) return;
+    let stale = false;
+    (async () => {
+      const valid = await apiCheckAuth();
+      if (stale) return;
+      if (valid) onOk();
+      else localStorage.removeItem("aspan-token");
+    })();
+    return () => { stale = true; };
   }, [onOk]);
 
   const tryIn = async () => {
@@ -2082,6 +2222,7 @@ export default function App() {
   const [images, setImages] = useState({});
   const [cafeInfo, setCafeInfo] = useState({ isOpen: true, hours: {} });
   const [bookingOpen, setBookingOpen] = useState(false);
+  const [boardOpen, setBoardOpen] = useState(false);
   const [activeBooking, setActiveBooking] = useState(null); // set while a reservation is in progress
 
   const t = useCallback((k) => T[lang][k] || k, [lang]);
@@ -2144,14 +2285,27 @@ export default function App() {
   }, []);
 
   const updateStatus = useCallback(async (id, status, extra) => {
-    await apiUpdateStatus(id, status, extra);
+    const res = await apiUpdateStatus(id, status, extra);
+    if (res === "auth") {
+      // Token expired mid-session: bounce to the login screen instead of
+      // pretending the update worked and letting the poll revert it.
+      localStorage.removeItem("aspan-token");
+      alert(lang === "en" ? "Your session has expired. Please sign in again." : "Сессия истекла. Пожалуйста, войдите снова.");
+      window.location.reload();
+      return;
+    }
+    if (res !== true) {
+      alert(lang === "en" ? "Failed to update the order. Check your connection and try again." : "Не удалось обновить заказ. Проверьте соединение и попробуйте ещё раз.");
+      refreshOrders();
+      return;
+    }
     // Optimistic mirror of the server-side prep fields so the countdown
     // shows immediately; the next orders poll overwrites with server values.
     const prep = extra && extra.preparation_minutes
       ? { preparation_minutes: extra.preparation_minutes, preparation_started_at: Date.now(), estimated_ready_at: Date.now() + extra.preparation_minutes * 60000 }
       : {};
     setOrders((prev) => prev.map((o) => o.id === id ? { ...o, status, ...prep } : o));
-  }, []);
+  }, [lang, refreshOrders]);
 
   const cartCount = Object.values(cart).reduce((s, q) => s + q, 0);
   const cartTotal = menu ? Object.entries(cart).reduce((s, [id, q]) => {
@@ -2185,7 +2339,9 @@ export default function App() {
           <GuestSite lang={lang} setLang={setLang} t={t} menu={menu} cart={cart} setQty={setQty} cafeInfo={cafeInfo}
             openCart={() => setCartOpen(true)} cartCount={cartCount} cartTotal={cartTotal}
             goAdmin={() => setView("admin")} lastOrder={lastOrder} orders={orders} images={images}
-            openBooking={() => setBookingOpen(true)} />
+            openBooking={() => setBookingOpen(true)} openBoard={() => setBoardOpen(true)} />
+          <OrdersBoard open={boardOpen} onClose={() => setBoardOpen(false)} orders={orders}
+            lang={lang} t={t} refreshOrders={refreshOrders} />
           <BookingWizard open={bookingOpen} onClose={() => setBookingOpen(false)} lang={lang} t={t}
             onProceed={(booking, wantsFood) => {
               setActiveBooking(booking);

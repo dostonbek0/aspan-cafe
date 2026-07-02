@@ -70,6 +70,15 @@ def login():
     if not token:
         return jsonify(error="wrong username or password"), 401
     return jsonify(token=token)
+
+
+@app.route("/api/auth/check", methods=["GET"])
+@require_owner
+def auth_check():
+    # Lets the frontend validate a stored token before entering the admin
+    # panel (tokens expire after 12h; without this check the panel opened
+    # with a dead token and every write silently failed with 401).
+    return jsonify({"ok": True})
 @app.route("/api/menu", methods=["GET"])
 def get_menu():
     conn = get_db()
